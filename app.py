@@ -1,17 +1,15 @@
 import cv2
 import numpy as np
 import streamlit as st
-import time
 from ultralytics import YOLO
+from streamlit_webrtc import webrtc_streamer, RTCConfiguration
+import av
 
 # ==========================================
-# 1. PAGE SETUP
+# 1. PAGE SETUP & CYBER CSS OVERRIDE
 # ==========================================
 st.set_page_config(page_title="VisionGuard AI", layout="wide", initial_sidebar_state="expanded")
 
-# ==========================================
-# 2. SURGICAL CSS OVERRIDE (ICONS PROTECTED)
-# ==========================================
 st.markdown("""
 <style>
     @import url('https://fonts.googleapis.com/css2?family=Silkscreen&family=VT323&display=swap');
@@ -94,7 +92,7 @@ st.markdown("""
         text-transform: uppercase;
     }
 
-    /* 6. KILL THE RED SLIDERS (Using Streamlit's baseweb architecture) */
+    /* 6. SLIDERS (Neon Green) */
     div[data-baseweb="slider"] > div > div > div {
         background: #00FF00 !important; 
     }
@@ -128,17 +126,20 @@ st.markdown("""
 st.markdown("<h1>VisionGuard :: Autonomous Agent</h1>", unsafe_allow_html=True)
 
 # ==========================================
-# 3. CORE LOGIC 
+# 2. CORE AI SETUP
 # ==========================================
 @st.cache_resource
 def load_model():
     return YOLO("yolov8n.pt") 
 
 model = load_model()
-G = 9.81  # Gravity m/s^2
+G = 9.81  
+
+# Cloud STUN Server Configuration (Crucial for WebRTC to pierce firewalls)
+RTC_CONFIGURATION = RTCConfiguration({"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]})
 
 # ==========================================
-# 4. SIDEBAR CONTROLS 
+# 3. SIDEBAR CONTROLS 
 # ==========================================
 st.sidebar.markdown("<h2>Agent Telemetry Controls</h2>", unsafe_allow_html=True)
 speed_kmh = st.sidebar.slider("VELOCITY VECTOR (km/h)", min_value=30, max_value=160, value=90, step=5)
@@ -156,42 +157,15 @@ top_width = st.sidebar.slider("Track Top Width X (%)", 5, 50, 12, step=1) / 100.
 bottom_width = st.sidebar.slider("Track Bottom Width X (%)", 20, 100, 85, step=1) / 100.0
 
 # ==========================================
-# 5. MAIN LAYOUT (STRICT PLACEHOLDERS)
+# 4. WEBRTC VIDEO PROCESSING CALLBACK
 # ==========================================
-col1, col2 = st.columns([5, 4], gap="large")
-
-with col1:
-    st.markdown("<div class='terminal-header'>// ANALYTICS.STREAM / PERCEPTION.AGENT_01</div>", unsafe_allow_html=True)
-    video_placeholder = st.empty() 
-
-with col2:
-    st.markdown("<div class='terminal-header'>// SYSTEM.STATUS / DIGITAL.TWIN</div>", unsafe_allow_html=True)
+def video_frame_callback(frame: av.VideoFrame) -> av.VideoFrame:
+    img = frame.to_ndarray(format="bgr24")
     
-    st.markdown("<h3 style='margin-top:0;'>System State</h3>", unsafe_allow_html=True)
-    status_placeholder = st.empty() 
-    
-    st.markdown("<br>", unsafe_allow_html=True)
-    st.markdown("<h3>Telemetry Readouts</h3>", unsafe_allow_html=True)
-    m_col1, m_col2 = st.columns(2)
-    with m_col1:
-        st.metric("Kinetic Speed (km/h)", f"{speed_kmh}")
-    with m_col2:
-        st.metric("Calc Braking Boundary (m)", f"{stopping_distance:.1f}")
-
-# ==========================================
-# 6. VIDEO LOOP
-# ==========================================
-cap = cv2.VideoCapture(0)
-
-while cap.isOpened():
-    ret, frame = cap.read()
-    if not ret:
-        break
-
-    h, w, _ = frame.shape
+    h, w, _ = img.shape
     center_x = w / 2
     
-    # Calculate mask geometry
+    # Calculate mask geometry based on sliders
     t_left_x = int(center_x - (w * top_width / 2))
     t_right_x = int(center_x + (w * top_width / 2))
     b_left_x = int(center_x - (w * bottom_width / 2))
@@ -204,9 +178,11 @@ while cap.isOpened():
         [b_right_x, base_y], [b_left_x, base_y]    
     ], np.int32)
 
-    results = model(frame, classes=[0, 19, 2, 7], verbose=False)
+    # Run YOLO (Classes: 0=Person, 19=Cow/Animal, 2=Car, 7=Truck)
+    results = model(img, classes=[0, 19, 2, 7], verbose=False)
     
-    cv2.polylines(frame, [roi_points], isClosed=True, color=(0, 255, 0), thickness=2)
+    # Draw tracking boundary
+    cv2.polylines(img, [roi_points], isClosed=True, color=(0, 255, 0), thickness=2)
     
     danger_detected = False
     
@@ -216,18 +192,46 @@ while cap.isOpened():
             bottom_center = (int((x1 + x2) / 2), int(y2))
             
             if cv2.pointPolygonTest(roi_points, bottom_center, False) >= 0:
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 2)
+                cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (0, 0, 255), 3)
                 danger_detected = True
             else:
-                cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 200, 0), 1)
+                cv2.rectangle(img, (int(x1), int(y1)), (int(x2), int(y2)), (255, 200, 0), 1)
 
-    video_placeholder.image(frame, channels="BGR", use_container_width=True)
-    
+    # Hard-print the system status directly onto the video feed
     if danger_detected:
-        status_placeholder.error(f"🚨 CRITICAL_OVERRIDE // OBSTACLE_DETECTED // AUTO_BRAKE_ENGAGED // STOPPING_BOUNDARY: {stopping_distance:.1f} M")
+        cv2.putText(img, f"CRITICAL OVERRIDE: OBSTACLE DETECTED!", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 3)
+        cv2.putText(img, f"AUTO BRAKING DISTANCE: {stopping_distance:.1f} M", (20, 90), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
     else:
-        status_placeholder.success("✅ PATH_CONCURRENCY // SYSTEM_NOMINAL // AGENT_DECISION: NO_OBSTRUCTION")
-        
-    time.sleep(0.01)
+        cv2.putText(img, "PATH CLEAR // NOMINAL", (20, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
 
-cap.release()
+    return av.VideoFrame.from_ndarray(img, format="bgr24")
+
+# ==========================================
+# 5. MAIN UI LAYOUT
+# ==========================================
+col1, col2 = st.columns([5, 4], gap="large")
+
+with col1:
+    st.markdown("<div class='terminal-header'>// ANALYTICS.STREAM / PERCEPTION.AGENT_01</div>", unsafe_allow_html=True)
+    
+    # The WebRTC Component
+    webrtc_streamer(
+        key="visionguard-live",
+        video_frame_callback=video_frame_callback,
+        rtc_configuration=RTC_CONFIGURATION,
+        media_stream_constraints={"video": True, "audio": False}
+    )
+
+with col2:
+    st.markdown("<div class='terminal-header'>// SYSTEM.STATUS / DIGITAL.TWIN</div>", unsafe_allow_html=True)
+    st.markdown("<h3>System Initialization Status</h3>", unsafe_allow_html=True)
+    
+    st.success("✅ CLOUD DEPLOYMENT STABLE. AWAITING CAMERA SYNC...")
+    
+    st.markdown("<br>", unsafe_allow_html=True)
+    st.markdown("<h3>Telemetry Readouts</h3>", unsafe_allow_html=True)
+    m_col1, m_col2 = st.columns(2)
+    with m_col1:
+        st.metric("Kinetic Speed (km/h)", f"{speed_kmh}")
+    with m_col2:
+        st.metric("Calc Braking Boundary (m)", f"{stopping_distance:.1f}")
