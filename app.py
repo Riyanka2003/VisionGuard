@@ -214,8 +214,8 @@ col1, col2 = st.columns([5, 4], gap="large")
 with col1:
     st.markdown("<div class='terminal-header'>// ANALYTICS.STREAM / PERCEPTION.AGENT_01</div>", unsafe_allow_html=True)
     
-    # The WebRTC Component
-    webrtc_streamer(
+    # Capture the WebRTC context to check its state
+    webrtc_ctx = webrtc_streamer(
         key="visionguard-live",
         video_frame_callback=video_frame_callback,
         rtc_configuration=RTC_CONFIGURATION,
@@ -226,7 +226,11 @@ with col2:
     st.markdown("<div class='terminal-header'>// SYSTEM.STATUS / DIGITAL.TWIN</div>", unsafe_allow_html=True)
     st.markdown("<h3>System Initialization Status</h3>", unsafe_allow_html=True)
     
-    st.success("✅ CLOUD DEPLOYMENT STABLE. AWAITING CAMERA SYNC...")
+    # Dynamically update based on the camera state
+    if webrtc_ctx.state.playing:
+        st.success("✅ AGENT ACTIVE // VISION SYNCED // CRITICAL ALERTS ROUTED TO HUD")
+    else:
+        st.warning("⏳ CLOUD DEPLOYMENT STABLE. AWAITING CAMERA SYNC...")
     
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("<h3>Telemetry Readouts</h3>", unsafe_allow_html=True)
